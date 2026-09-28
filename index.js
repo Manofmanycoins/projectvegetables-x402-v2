@@ -16,8 +16,6 @@ const PROJECT = {
   facilitatorUrl: "https://x402.org/facilitator"
 };
 
-// Follow the current x402 v2 Hono server pattern exactly:
-// remote HTTP facilitator + explicit EVM exact scheme registration.
 const facilitatorClient = new HTTPFacilitatorClient({
   url: PROJECT.facilitatorUrl
 });
@@ -68,10 +66,20 @@ app.get("/health", (c) =>
   })
 );
 
-// Apply x402 only to the configured protected route.
-// The fifth argument is left at its documented default (true) so the
-// resource server syncs supported payment kinds from the public test facilitator.
-app.use(paymentMiddleware(routes, resourceServer));
+/*
+ * Important for Cloudflare Workers:
+ * false = do not call resourceServer.initialize()
+ * and do not sync facilitator capabilities at startup.
+ */
+app.use(
+  paymentMiddleware(
+    routes,
+    resourceServer,
+    undefined,
+    undefined,
+    false
+  )
+);
 
 app.get("/premium", (c) =>
   c.json({
