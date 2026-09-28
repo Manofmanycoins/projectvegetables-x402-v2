@@ -51,7 +51,9 @@ class CloudflareFacilitatorClient {
   }
 
   async getSupported() {
-    return this.request("supported", { method: "GET" });
+    return this.request("supported", {
+      method: "GET"
+    });
   }
 
   async verify(paymentPayload, paymentRequirements) {
@@ -86,12 +88,14 @@ const resourceServer = new x402ResourceServer(facilitatorClient)
 
 const routes = {
   "GET /premium": {
-    accepts: {
-      scheme: "exact",
-      price: PROJECT.price,
-      network: PROJECT.network,
-      payTo: PROJECT.payTo
-    },
+    accepts: [
+      {
+        scheme: "exact",
+        price: PROJECT.price,
+        network: PROJECT.network,
+        payTo: PROJECT.payTo
+      }
+    ],
     description: "Project Vegetables paid machine-readable proof",
     mimeType: "application/json"
   }
@@ -161,9 +165,6 @@ app.get("/facilitator-health", async (c) => {
   }
 });
 
-/*
- * NEW: isolate resourceServer.initialize() and expose the real cause.
- */
 app.get("/init-test", async (c) => {
   try {
     await resourceServer.initialize();
@@ -197,9 +198,6 @@ app.get("/init-test", async (c) => {
   }
 });
 
-/*
- * Keep facilitator auto-sync OFF while diagnosing initialization.
- */
 app.use(
   paymentMiddleware(
     routes,
