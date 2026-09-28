@@ -15,18 +15,6 @@ const PROJECT = {
   facilitatorUrl: "https://x402.org/facilitator"
 };
 
-/*
- * Cloudflare-native facilitator client.
- *
- * It implements the three methods x402ResourceServer expects:
- *   getSupported()
- *   verify()
- *   settle()
- *
- * We intentionally use plain Worker fetch() calls and avoid the stock
- * HTTPFacilitatorClient request/timeout layer that has been failing in
- * this Cloudflare runtime.
- */
 class CloudflareFacilitatorClient {
   constructor(baseUrl) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
@@ -63,9 +51,7 @@ class CloudflareFacilitatorClient {
   }
 
   async getSupported() {
-    return this.request("supported", {
-      method: "GET"
-    });
+    return this.request("supported", { method: "GET" });
   }
 
   async verify(paymentPayload, paymentRequirements) {
@@ -111,10 +97,6 @@ const routes = {
   }
 };
 
-/*
- * Public endpoints are registered before the payment middleware.
- */
-
 app.get("/", (c) =>
   c.json({
     service: "Project Vegetables x402",
@@ -128,7 +110,7 @@ app.get("/", (c) =>
     paidEndpoint: "/premium",
     recipient: PROJECT.payTo,
     facilitator: PROJECT.facilitatorUrl,
-    status: "ready"
+    status: "diagnostic"
   })
 );
 
@@ -145,10 +127,6 @@ app.get("/health", (c) =>
   })
 );
 
-/*
- * Directly test the facilitator with Cloudflare's native fetch.
- * This endpoint makes no payment and exposes no secrets.
- */
 app.get("/facilitator-health", async (c) => {
   try {
     const supported = await facilitatorClient.getSupported();
@@ -174,8 +152,9 @@ app.get("/facilitator-health", async (c) => {
     return c.json(
       {
         ok: false,
-        facilitator: PROJECT.facilitatorUrl,
-        error: error?.message ?? String(error)
+        errorName: error?.name ?? null,
+        errorMessage: error?.message ?? String(error),
+        stack: error?.stack ?? null
       },
       500
     );
@@ -183,10 +162,53 @@ app.get("/facilitator-health", async (c) => {
 });
 
 /*
- * Let the x402 server initialize normally now that the facilitator
- * client uses plain Cloudflare-native fetch().
+ * NEW: isolate resourceServer.initialize() and expose the real cause.
  */
-app.use(paymentMiddleware(routes, resourceServer));
+app.get("/init-test", async (c) => {
+  try {
+    await resourceServer.initialize();
+
+    const supportedKind = resourceServer.getSupportedKind(
+      2,
+      PROJECT.network,
+      "exact"
+    );
+
+    return c.json({
+      ok: true,
+      initialized: true,
+      supportedKindFound: Boolean(supportedKind),
+      supportedKind: supportedKind ?? null
+    });
+  } catch (error) {
+    return c.json(
+      {
+        ok: false,
+        errorName: error?.name ?? null,
+        errorMessage: error?.message ?? String(error),
+        causeName: error?.cause?.name ?? null,
+        causeMessage:
+          error?.cause?.message ??
+          (error?.cause ? String(error.cause) : null),
+        stack: error?.stack ?? null
+      },
+      500
+    );
+  }
+});
+
+/*
+ * Keep facilitator auto-sync OFF while diagnosing initialization.
+ */
+app.use(
+  paymentMiddleware(
+    routes,
+    resourceServer,
+    undefined,
+    undefined,
+    false
+  )
+);
 
 app.get("/premium", (c) =>
   c.json({
@@ -205,7 +227,13 @@ app.notFound((c) =>
   c.json(
     {
       error: "Not found",
-      endpoints: ["/", "/health", "/facilitator-health", "/premium"]
+      endpoints: [
+        "/",
+        "/health",
+        "/facilitator-health",
+        "/init-test",
+        "/premium"
+      ]
     },
     404
   )
