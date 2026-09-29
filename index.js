@@ -32,21 +32,38 @@ resourceServer.register(
   new ExactEvmScheme()
 );
 
-/*
- * Initialize x402 once per Worker isolate.
- * All routes that need x402 wait on the same initialization.
- */
 let initializationPromise = null;
 
 function ensureX402Initialized() {
   if (!initializationPromise) {
-    initializationPromise = resourceServer.initialize().catch((error) => {
-      initializationPromise = null;
-      throw error;
-    });
+    initializationPromise = resourceServer
+      .initialize()
+      .catch((error) => {
+        initializationPromise = null;
+        throw error;
+      });
   }
 
   return initializationPromise;
+}
+
+function describeError(error) {
+  if (!error) {
+    return null;
+  }
+
+  return {
+    name: error?.name ?? null,
+    message: error?.message ?? String(error),
+    cause: error?.cause
+      ? {
+          name: error.cause?.name ?? null,
+          message:
+            error.cause?.message ??
+            String(error.cause)
+        }
+      : null
+  };
 }
 
 const routes = {
@@ -78,7 +95,12 @@ app.get("/", (c) =>
     paidEndpoint: "/premium",
     recipient: PROJECT.payTo,
     facilitator: PROJECT.facilitatorUrl,
-    status: "online"
+    status: "online",
+    diagnostics: [
+      "/payment-requirements",
+      "/facilitator-check",
+      "/x402-init-check"
+    ]
   })
 );
 
@@ -106,6 +128,12 @@ app.get("/payment-config", (c) =>
   })
 );
 
+/*
+ * Existing known-good diagnostic.
+ *
+ * Initializes x402 and asks the resource server
+ * to construct the payment requirements.
+ */
 app.get("/payment-requirements", async (c) => {
   try {
     await ensureX402Initialized();
@@ -129,7 +157,8 @@ app.get("/payment-requirements", async (c) => {
     return c.json(
       {
         ok: false,
-        error: error?.message ?? String(error)
+        stage: "payment-requirements",
+        error: describeError(error)
       },
       500
     );
@@ -137,17 +166,137 @@ app.get("/payment-requirements", async (c) => {
 });
 
 /*
- * Ensure the shared x402 resource server is initialized
- * before the payment middleware handles /premium.
+ * DIAGNOSTIC #1
+ *
+ * Tests the facilitator directly through the exact
+ * HTTPFacilitatorClient used by x402.
+ *
+ * This performs NO payment and NO signing.
  */
-app.use("/premium", async (c, next) => {
-  await ensureX402Initialized();
-  await next();
+app.get("/facilitator-check", async (c) => {
+  try {
+    const supported =
+      await facilitatorClient.getSupported();
+
+    const kinds = Array.isArray(supported?.kinds)
+      ? supported.kinds
+      : [];
+
+    const matchingKinds = kinds.filter(
+      (kind) =>
+        kind?.network === PROJECT.network &&
+        kind?.scheme === "exact"
+    );
+
+    return c.json({
+      ok: true,
+      stage: "facilitator-getSupported",
+      facilitator: PROJECT.facilitatorUrl,
+      totalKinds: kinds.length,
+      baseSepoliaExactSupported:
+        matchingKinds.length > 0,
+      matchingKinds
+    });
+  } catch (error) {
+    return c.json(
+      {
+        ok: false,
+        stage: "facilitator-getSupported",
+        facilitator: PROJECT.facilitatorUrl,
+        error: describeError(error)
+      },
+      500
+    );
+  }
 });
 
 /*
- * x402 payment middleware.
+ * DIAGNOSTIC #2
+ *
+ * Creates a completely fresh facilitator client and
+ * completely fresh x402 resource server INSIDE the
+ * request handler.
+ *
+ * This is deliberate.
+ *
+ * If this succeeds through the Service Binding while
+ * /premium fails, we have isolated the problem to
+ * lifecycle/global-state behavior rather than
+ * facilitator connectivity.
+ *
+ * This performs NO payment and NO signing.
  */
+app.get("/x402-init-check", async (c) => {
+  try {
+    const freshFacilitator =
+      new HTTPFacilitatorClient({
+        url: PROJECT.facilitatorUrl
+      });
+
+    const freshResourceServer =
+      new x402ResourceServer(
+        freshFacilitator
+      );
+
+    freshResourceServer.register(
+      PROJECT.network,
+      new ExactEvmScheme()
+    );
+
+    await freshResourceServer.initialize();
+
+    const requirements =
+      await freshResourceServer.buildPaymentRequirements({
+        scheme: "exact",
+        price: PROJECT.price,
+        network: PROJECT.network,
+        payTo: PROJECT.payTo
+      });
+
+    return c.json({
+      ok: true,
+      stage: "fresh-x402-initialize",
+      network: PROJECT.network,
+      price: PROJECT.price,
+      payTo: PROJECT.payTo,
+      requirements
+    });
+  } catch (error) {
+    return c.json(
+      {
+        ok: false,
+        stage: "fresh-x402-initialize",
+        error: describeError(error)
+      },
+      500
+    );
+  }
+});
+
+/*
+ * Protected x402 route.
+ */
+app.use("/premium", async (c, next) => {
+  try {
+    await ensureX402Initialized();
+    await next();
+  } catch (error) {
+    console.error(
+      "Premium initialization failure:",
+      error
+    );
+
+    return c.json(
+      {
+        error: "x402 initialization failed",
+        stage: "premium-initialize",
+        detail: describeError(error)
+      },
+      500
+    );
+  }
+});
+
 app.use(
   paymentMiddleware(
     routes,
@@ -177,6 +326,8 @@ app.notFound((c) =>
         "/health",
         "/payment-config",
         "/payment-requirements",
+        "/facilitator-check",
+        "/x402-init-check",
         "/premium"
       ]
     },
@@ -193,7 +344,7 @@ app.onError((error, c) => {
   return c.json(
     {
       error: "Internal Server Error",
-      detail: error?.message ?? String(error)
+      detail: describeError(error)
     },
     500
   );
