@@ -32,6 +32,23 @@ resourceServer.register(
   new ExactEvmScheme()
 );
 
+/*
+ * Initialize x402 once per Worker isolate.
+ * All routes that need x402 wait on the same initialization.
+ */
+let initializationPromise = null;
+
+function ensureX402Initialized() {
+  if (!initializationPromise) {
+    initializationPromise = resourceServer.initialize().catch((error) => {
+      initializationPromise = null;
+      throw error;
+    });
+  }
+
+  return initializationPromise;
+}
+
 const routes = {
   "GET /premium": {
     accepts: [
@@ -89,15 +106,9 @@ app.get("/payment-config", (c) =>
   })
 );
 
-/*
- * TEMPORARY DIAGNOSTIC
- *
- * Ask the same x402 resource server used by /premium
- * to resolve the real payment requirements.
- */
 app.get("/payment-requirements", async (c) => {
   try {
-    await resourceServer.initialize();
+    await ensureX402Initialized();
 
     const requirements =
       await resourceServer.buildPaymentRequirements({
@@ -118,8 +129,7 @@ app.get("/payment-requirements", async (c) => {
     return c.json(
       {
         ok: false,
-        error:
-          error?.message ?? String(error)
+        error: error?.message ?? String(error)
       },
       500
     );
@@ -127,7 +137,16 @@ app.get("/payment-requirements", async (c) => {
 });
 
 /*
- * Working x402 middleware.
+ * Ensure the shared x402 resource server is initialized
+ * before the payment middleware handles /premium.
+ */
+app.use("/premium", async (c, next) => {
+  await ensureX402Initialized();
+  await next();
+});
+
+/*
+ * x402 payment middleware.
  */
 app.use(
   paymentMiddleware(
@@ -174,8 +193,7 @@ app.onError((error, c) => {
   return c.json(
     {
       error: "Internal Server Error",
-      detail:
-        error?.message ?? String(error)
+      detail: error?.message ?? String(error)
     },
     500
   );
