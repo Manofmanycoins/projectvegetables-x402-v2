@@ -74,6 +74,30 @@ app.get("/health", (c) =>
   })
 );
 
+/*
+ * Read-only diagnostic endpoint.
+ *
+ * This reports the payment configuration we are supplying
+ * to x402 without changing or bypassing /premium.
+ */
+app.get("/payment-config", (c) =>
+  c.json({
+    ok: true,
+    protectedRoute: "GET /premium",
+    scheme: "exact",
+    price: PROJECT.price,
+    network: PROJECT.network,
+    networkName: PROJECT.networkName,
+    paymentAsset: "USDC",
+    payTo: PROJECT.payTo,
+    facilitator: PROJECT.facilitatorUrl,
+    x402Version: 2
+  })
+);
+
+/*
+ * Keep the working x402 middleware unchanged.
+ */
 app.use(
   paymentMiddleware(
     routes,
@@ -101,6 +125,7 @@ app.notFound((c) =>
       endpoints: [
         "/",
         "/health",
+        "/payment-config",
         "/premium"
       ]
     },
