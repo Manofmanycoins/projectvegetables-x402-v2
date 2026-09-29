@@ -74,12 +74,6 @@ app.get("/health", (c) =>
   })
 );
 
-/*
- * Read-only diagnostic endpoint.
- *
- * This reports the payment configuration we are supplying
- * to x402 without changing or bypassing /premium.
- */
 app.get("/payment-config", (c) =>
   c.json({
     ok: true,
@@ -96,7 +90,53 @@ app.get("/payment-config", (c) =>
 );
 
 /*
- * Keep the working x402 middleware unchanged.
+ * TEMPORARY DIAGNOSTIC
+ *
+ * Fetches the real protected endpoint and exposes the
+ * generated 402 response headers/body for inspection.
+ */
+app.get("/payment-challenge", async (c) => {
+  try {
+    const premiumUrl =
+      new URL("/premium", c.req.url).toString();
+
+    const response = await fetch(premiumUrl, {
+      method: "GET",
+      headers: {
+        accept: "application/json"
+      }
+    });
+
+    const headers = {};
+
+    for (const [key, value] of response.headers.entries()) {
+      headers[key] = value;
+    }
+
+    const body = await response.text();
+
+    return c.json({
+      ok: true,
+      fetched: premiumUrl,
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+      body
+    });
+  } catch (error) {
+    return c.json(
+      {
+        ok: false,
+        error:
+          error?.message ?? String(error)
+      },
+      500
+    );
+  }
+});
+
+/*
+ * Working x402 middleware — unchanged.
  */
 app.use(
   paymentMiddleware(
@@ -126,6 +166,7 @@ app.notFound((c) =>
         "/",
         "/health",
         "/payment-config",
+        "/payment-challenge",
         "/premium"
       ]
     },
