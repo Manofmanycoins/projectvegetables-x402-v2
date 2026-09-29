@@ -92,36 +92,27 @@ app.get("/payment-config", (c) =>
 /*
  * TEMPORARY DIAGNOSTIC
  *
- * Fetches the real protected endpoint and exposes the
- * generated 402 response headers/body for inspection.
+ * Ask the same x402 resource server used by /premium
+ * to resolve the real payment requirements.
  */
-app.get("/payment-challenge", async (c) => {
+app.get("/payment-requirements", async (c) => {
   try {
-    const premiumUrl =
-      new URL("/premium", c.req.url).toString();
+    await resourceServer.initialize();
 
-    const response = await fetch(premiumUrl, {
-      method: "GET",
-      headers: {
-        accept: "application/json"
-      }
-    });
-
-    const headers = {};
-
-    for (const [key, value] of response.headers.entries()) {
-      headers[key] = value;
-    }
-
-    const body = await response.text();
+    const requirements =
+      await resourceServer.buildPaymentRequirements({
+        scheme: "exact",
+        price: PROJECT.price,
+        network: PROJECT.network,
+        payTo: PROJECT.payTo
+      });
 
     return c.json({
       ok: true,
-      fetched: premiumUrl,
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-      body
+      configuredPrice: PROJECT.price,
+      configuredNetwork: PROJECT.network,
+      configuredPayTo: PROJECT.payTo,
+      requirements
     });
   } catch (error) {
     return c.json(
@@ -136,7 +127,7 @@ app.get("/payment-challenge", async (c) => {
 });
 
 /*
- * Working x402 middleware — unchanged.
+ * Working x402 middleware.
  */
 app.use(
   paymentMiddleware(
@@ -166,7 +157,7 @@ app.notFound((c) =>
         "/",
         "/health",
         "/payment-config",
-        "/payment-challenge",
+        "/payment-requirements",
         "/premium"
       ]
     },
